@@ -5,13 +5,15 @@ const isTV = process.platform === 'linux' && process.title.startsWith('/opt/usr/
 module.exports.onStart = function () {
     console.log('Service started.');
     const adbhost = require('adbhost');
+    const fs = require('fs');
     const WebSocket = require('ws');
     const pushFile = require('./filePush.js');
     const ghApi = require('./ghApi.js');
     const fetch = require('node-fetch');
     const express = require('express');
     const app = express();
-    app.use(express.static(`${process.platform === 'win32' ? 'C:' : '' }/snapshot/TizenBrewUpdater`));
+    const isUsingUpdater = fs.existsSync(`${process.platform === 'win32' ? 'C:' : '' }/snapshot/TizenBrewUpdater`);
+    app.use(express.static(isUsingUpdater ? `${process.platform === 'win32' ? 'C:' : '' }/snapshot/TizenBrewUpdater` : '../'));
     const server = new WebSocket.Server({ server: app.listen(8083) });
 
     global.currentClient = null;
@@ -35,18 +37,31 @@ module.exports.onStart = function () {
         }
 
         adb = adbhost.createConnection({ host: ip, port: 26101 });
+        
+        let connected = false;
+        const waitTimeout = setTimeout(() => {
+            if (connected) global.currentClient.send(JSON.stringify({ type: 'connectedToDaemon' }));
+        }, 1000);
 
         adb._stream.on('connect', () => {
             console.log('ADB connection established');
-            global.currentClient.send(JSON.stringify({ type: 'connectedToDaemon' }));
+            connected = true;
         });
 
         adb._stream.on('error', (e) => {
             console.log('ADB connection error. ' + e);
+            clearTimeout(waitTimeout);
+
+            if (e.code === 'ECONNREFUSED') {
+                global.currentClient.send(JSON.stringify({ type: 'error', message: 'Could not connect to daemon. Make sure the TV is on and the IP is correct.' }));
+            } else if (e.code === 'ECONNRESET') {
+                global.currentClient.send(JSON.stringify({ type: 'error', message: 'Connection reset. Either your TVs Host PC IP wasn\'t set to this devices IP or it was not rebooted properly. Reboot by holding the power button till you see the Samsung logo or the bouncing house.' }));
+            }
         });
 
         adb._stream.on('close', () => {
             console.log('ADB connection closed.');
+            clearTimeout(waitTimeout);
         });
 
     }
